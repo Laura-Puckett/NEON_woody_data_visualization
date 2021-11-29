@@ -1,0 +1,14 @@
+name: NEON_Woody_Plant_Veg_Structure_Vis
+title: NEON_Woody_Plant_Veg_Structure_Vis
+username:
+account: laurapuckett
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 5211321
+bundleId: 5297692
+url: https://laurapuckett.shinyapps.io/NEON_Woody_Plant_Veg_Structure_Vis/
+when: 1637963778.57418
+lastSyncTime: 1637963778.57419
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: 0_download_data.R|1_organize_data.R|input_options_for_shiny|neon_token.R|veglist

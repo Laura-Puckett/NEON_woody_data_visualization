@@ -1,0 +1,220 @@
+---
+title: "Interactive NEON Woody Vegetation App"
+author: "Laura Puckett"
+date: "11/29/2021"
+output: html_document
+---
+
+
+- Interactive App [link](https://laurapuckett.shinyapps.io/NEON_Woody_Plant_Veg_Structure_Vis/)
+- Code Repository [link](https://github.com/Laura-Puckett/NEON_woody_data_visualization)
+
+My code for this project is shown in a reproducible example below. 
+
+<h2> Part 1. Download Data <h2/>
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+<h3> Load Libraries <h3/>
+R version:  `r getRversion()`
+```{r Load Libraries, message=FALSE, warning=FALSE}
+library(neonUtilities);  library(ggplot2)
+ library(dplyr); library(shinyr); library(shinythemes)
+
+```
+
+<h3> Download Data using NEON API <h3/>
+```{r Download Data, eval=FALSE}
+
+library(neonUtilities); 
+
+# load my neon token as an object called NEON_TOKEN
+source('./neon_token.R') 
+
+# instructions for getting a NEON API token can be found here: https://www.neonscience.org/resources/learning-hub/tutorials/neon-api-tokens-tutorial
+
+veglist = loadByProduct(dpID="DP1.10098.001",
+                        site = "all",
+                        package = "basic",
+                        check.size = F,
+                        token = NEON_TOKEN)
+saveRDS(veglist, './veglist.Rdata')
+
+```
+<h2> Part 2. Organize Data <h2/>
+
+<h3>Load datasets of interest and select columns of interest <h3/>
+```{r View Site Metadata}
+veglist = readRDS('./veglist.Rdata')
+
+veg_ind = veglist$vst_apparentindividual %>%
+  dplyr::select(siteID, plotID, height, individualID, plantStatus,
+                stemDiameter, date, eventID)
+
+veg_loc = veglist$vst_mappingandtagging %>%
+  dplyr::select(domainID, siteID, plotID, individualID, taxonID, scientificName) %>%
+  unique()
+
+plot_info = veglist$vst_perplotperyear %>% 
+  select(eventID, siteID, plotID, plotType) %>% 
+  unique()
+
+rm(veglist) # unload the large file now that it's no longer needed
+```
+
+
+<h3>Join Datasets<h3/>
+
+```{r}
+veg = veg_ind %>%
+  inner_join(veg_loc, by = c("individualID", "siteID", "plotID")) %>%
+  inner_join(plot_info, by = c("siteID", "plotID", "eventID"))
+
+veg %>% head()
+```
+<h3> Filter Data <h3/>
+```{r, eval = F}
+veg = veg %>%
+  # filter for Live trees
+  filter(substr(plantStatus, 1,4) == "Live") %>% 
+  # filter for tree measurements (which start at 10cm)
+  filter(stemDiameter > 10) %>%
+  filter(is.na(height) == F & is.na(stemDiameter) == F) %>%
+  # remove outliers
+  group_by(taxonID) %>%
+  mutate(height_lower =  boxplot(height, plot=FALSE)$stats[1],
+         height_upper = boxplot(height, plot=FALSE)$stats[5],
+         diam_lower =  boxplot(stemDiameter, plot=FALSE)$stats[1],
+         diam_upper = boxplot(stemDiameter, plot=FALSE)$stats[5]) %>%
+  filter(height > height_lower & height < height_upper,
+         stemDiameter > diam_lower & stemDiameter < diam_upper) %>%
+  dplyr::select(-height_lower, -height_upper, -diam_lower, -diam_upper) %>%
+  ungroup()
+
+# Select columns
+veg = veg %>%
+  dplyr::select(siteID, stemDiameter, height, plantStatus, scientificName, taxonID, date, individualID)
+
+```
+<h3> Get the 20 Most Commmon Species <h3/>
+```{r, eval = F}
+# Find top 20 species by observation count
+species = veg %>% 
+  group_by(taxonID, scientificName) %>%
+  summarize(obs_count = n()) %>%
+  arrange(desc(obs_count)) %>%
+  head(20) %>%
+  select(taxonID, scientificName) %>%
+  ungroup() %>%
+  mutate(num = row_number()) %>%
+  as.data.frame()
+```
+
+
+
+<h3> Write Output Files for Shiny App <h3/>
+```{r, eval = F}
+saveRDS(veg, './veg_data_for_shiny.Rdata')
+saveRDS(species, './species.Rdata')
+```
+
+<h2> Part 3. The Shiny app <h2/>
+<h3> Server Function <h3/>
+```{r, eval = F}
+server = function(input, output) {
+  selection = reactive({
+    as.numeric(input$optionNum)
+  })
+  selected_data <- reactive({
+    df <- veg %>%
+      filter(taxonID == species$taxonID[as.numeric(input$optionNum)]) %>%
+      dplyr::select(individualID, siteID,scientificName, plantStatus, date, stemDiameter, height)
+    
+    if(!input$Live){
+      df = df %>% filter(plantStatus != "Live")
+    }
+    if(!input$Live_DD){
+      df = df %>% filter(plantStatus != "Live, disease damaged")
+    }
+    if(!input$Live_PD){
+      df = df %>% filter(plantStatus != "Live, physically damaged")
+    }
+    if(!input$Live_BB){
+      df = df %>% filter(plantStatus != "Live, broken bole")
+    }
+    if(!input$Live_ID){
+      df = df %>% filter(plantStatus != "Live, insect damaged")
+    }
+    if(!input$Live_OD){
+      df = df %>% filter(plantStatus != "Live,  other damage")
+    }
+    
+    print(df)
+    df
+  })
+  
+  
+  output$table <- DT::renderDataTable({
+    table <- selected_data()
+  })
+  
+  output$plot1 <- renderPlot({
+    ggplot(data = selected_data(),
+           aes(x = stemDiameter, y = height)) +
+      theme_bw() + 
+      geom_point(aes(color = siteID), alpha = 0.4) +
+      geom_smooth(color = "black",size = 0.5, se = F) + 
+      xlab("Stem Diameter [cm]") + 
+      ylab("Tree Height [m]")  +
+      # ggtitle(paste("Selected Species:",
+      #               species$scientificName[selection()])) +
+      labs(colour = "NEON Site ID")+ 
+      theme(legend.position = "right",
+            axis.title = element_text(size = 16))
+  })
+  
+  output$result <- renderText({
+    paste("You have selected ", species$scientificName[selection()])
+  })
+}
+```
+
+<h3> User Interface Function <h3/>
+```{r, eval = F}
+ui = fluidPage(
+  theme = shinytheme("readable"),
+  h3("NEON Woody Plant Vegetation Structure Data"),
+  p("This app allows for quick visualization of tree height and diameter data for the 20 most common species in the NEON woody vegetation structure dataset. The data have been filtered to remove dead trees and obvious outliers for height and diameter. "),
+  HTML("<p style='color:#808080'>NEON (National Ecological Observatory Network). Woody plant vegetation structure, RELEASE-2021 (DP1.10098.001). https://doi.org/10.48443/e3qn-xw47. Dataset accessed from https://data.neonscience.org on November 24, 2021 </p>"),
+  p("\n"), 
+  fluidRow(column(width = 12, selectInput(inputId = "optionNum",
+                                          label = "Choose a Species Group",
+                                          choices = input_options,
+                                          selected = 1))),
+  fluidRow(column(width = 1, checkboxInput("Live", "Live", TRUE)),
+           column(width = 2, checkboxInput("Live_DD", "Live, disease damaged", TRUE,)),
+           column(width = 2, checkboxInput("Live_PD", "Live, physically damaged", TRUE)),
+           column(width = 2, checkboxInput("Live_BB", "Live, broken bole", TRUE)),
+           column(width = 2, checkboxInput("Live_ID", "Live, insect damaged", TRUE)),
+           column(width = 2, checkboxInput("Live_OD", "Live,  other damage", TRUE))),
+  
+  mainPanel(tabsetPanel(type = "tabs",
+                        tabPanel(title ="Plot",  plotOutput('plot1')),
+                        tabPanel("Data Table",  DT::dataTableOutput('table')))
+  )
+)
+```
+<h3> App Setup <h3/>
+```{r, eval = F}
+# load saved datasets
+veg = readRDS('./veg_data_for_shiny.Rdata')
+species = readRDS('./species.Rdata')
+
+# format input options
+input_options = species$num
+names(input_options) = species$scientificName
+```
+<h3> Run the App <h3/>
+```{r, eval = F}
+shinyApp(ui = ui, server = server)
+```
